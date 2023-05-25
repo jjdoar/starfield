@@ -1,7 +1,3 @@
-// Cannot change CLEAR_COLOR when using fade due to problems with the alpha channel
-
-use rand::Rng;
-
 use pixels::{Pixels, SurfaceTexture};
 use winit::{
     dpi::LogicalSize,
@@ -10,70 +6,48 @@ use winit::{
     window::WindowBuilder,
 };
 
-const WIDTH: usize = 256;
-const HEIGHT: usize = 64;
+const WINDOW_TITLE: &str = "Plotter";
+const SCREEN_WIDTH: usize = 128;
+const SCREEN_HEIGHT: usize = 128;
 const PIXEL_SIZE: usize = 8;
 
-// Dark grey
-// const CLEAR_COLOR: (u8, u8, u8, u8) = (0x07, 0x11, 0x08, 0x00);
-// Teal
-const CLEAR_COLOR: (u8, u8, u8, u8) = (0x0E, 0x7C, 0x7B, 0x00);
-
-// Light pink
-// const STAR_COLOR: (u8, u8, u8, u8) = (0xBF, 0xB1, 0xC1, 0xFF);
-// Light blue
-// const STAR_COLOR: (u8, u8, u8, u8) = (0xC7, 0xDB, 0xE6, 0xFF);
-// Bright orange
-// const STAR_COLOR: (u8, u8, u8, u8) = (0xEF, 0x83, 0x54, 0xFF);
-// Red
-const STAR_COLOR: (u8, u8, u8, u8) = (0xD6, 0x22, 0x46, 0xFF);
+const SCREEN_CENTER_X: f64 = (SCREEN_WIDTH / 2) as f64;
+const SCREEN_CENTER_Y: f64 = (SCREEN_HEIGHT / 2) as f64;
 
 fn main() {
-    // Window parameters
-    let title = "Starfield";
-
-    // Init window
     let event_loop = EventLoop::new();
 
-    let window_width = WIDTH * PIXEL_SIZE;
-    let window_height = HEIGHT * PIXEL_SIZE;
-    let size = LogicalSize::new(window_width as f64, window_height as f64);
+    let window_size = LogicalSize::new(
+        (SCREEN_WIDTH * PIXEL_SIZE) as f64,
+        (SCREEN_HEIGHT * PIXEL_SIZE) as f64,
+    );
 
     let window = WindowBuilder::new()
-        .with_title(title)
-        .with_inner_size(size)
-        .with_min_inner_size(size)
+        .with_title(WINDOW_TITLE)
+        .with_inner_size(window_size)
+        .with_min_inner_size(window_size)
         .build(&event_loop)
-        .unwrap();
+        .expect("Failed to create window");
 
-    // Init pixels
-    let window_size = window.inner_size();
     let mut pixels = Pixels::new(
-        WIDTH as u32,
-        HEIGHT as u32,
-        SurfaceTexture::new(window_size.width, window_size.height, &window),
+        SCREEN_WIDTH as u32,
+        SCREEN_HEIGHT as u32,
+        SurfaceTexture::new(
+            window.inner_size().width,
+            window.inner_size().height,
+            &window,
+        ),
     )
-    .unwrap();
+    .expect("Failed to create pixel buffer");
 
-    // Init starfield
-    let num_stars = 500;
-    let trail_length = 20.0;
-    let speed_min = 0.5;
-    let speed_max = 2.0;
+    let mut offset_x = -SCREEN_CENTER_X;
+    let mut offset_y = -SCREEN_CENTER_Y;
+    let mut scale_x = 1.0;
+    let mut scale_y = 1.0;
 
-    let mut rng = rand::thread_rng();
-    let mut starfield_right = Vec::with_capacity(num_stars);
-    for _ in 0..num_stars {
-        let x = rng.gen_range(0.0..WIDTH as f64);
-        let y = rng.gen_range(0.0..HEIGHT as f64);
-        let direction = (1.0, 0.0);
-        let speed = rng.gen_range(speed_min..speed_max);
-        starfield_right.push(Star {
-            position: (x, y),
-            direction,
-            speed,
-        });
-    }
+    let circle_x: f64 = 0.0;
+    let circle_y: f64 = 0.0;
+    let circle_radius: f64 = 32.0;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -81,112 +55,189 @@ fn main() {
                 window_id,
                 event: WindowEvent::CloseRequested,
             } => {
-                // Close window
                 if window_id == window.id() {
                     *control_flow = ControlFlow::Exit;
                 }
             }
             Event::MainEventsCleared => {
                 // Update
-                let width = WIDTH as f64;
-                for star in starfield_right.iter_mut() {
-                    // Star
-                    let (x0, y0) = star.position;
-                    let (dx, dy) = star.direction;
-                    let speed = star.speed;
+                let (world_x_before_zoom, world_y_before_zoom) = screen_to_world(
+                    SCREEN_CENTER_X,
+                    SCREEN_CENTER_Y,
+                    offset_x,
+                    offset_y,
+                    scale_x,
+                    scale_y,
+                );
 
-                    // Reset star if it is completely off screen
-                    if x0 >= width && x0 - dx * speed * trail_length >= width {
-                        star.position = (0.0, rng.gen_range(0.0..HEIGHT as f64));
-                        star.speed = rng.gen_range(speed_min..speed_max);
-                    } else {
-                        star.position = (x0 + dx * speed, y0 + dy * speed);
-                    }
-                }
+                scale_x *= 1.005;
+                scale_y *= 1.005;
+
+                let (world_x_after_zoom, world_y_after_zoom) = screen_to_world(
+                    SCREEN_CENTER_X,
+                    SCREEN_CENTER_Y,
+                    offset_x,
+                    offset_y,
+                    scale_x,
+                    scale_y,
+                );
+
+                offset_x += world_x_before_zoom - world_x_after_zoom;
+                offset_y += world_y_before_zoom + world_y_after_zoom;
 
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
                 // Render
-                clear(CLEAR_COLOR, pixels.frame_mut());
-                for star in starfield_right.iter() {
-                    let (x, y) = star.position;
-                    let (dx, dy) = star.direction;
-                    let speed = star.speed;
+                let frame = pixels.frame_mut();
+                clear(frame);
 
-                    let x0 = x as i32;
-                    let y0 = y as i32;
-                    let x1 = (x - dx * trail_length * speed) as i32;
-                    let y1 = (y - dy * trail_length * speed) as i32;
+                // Draw circle
+                for row in 0..SCREEN_HEIGHT {
+                    for col in 0..SCREEN_WIDTH {
+                        let (x, y) = screen_to_world(
+                            col as f64, row as f64, offset_x, offset_y, scale_x, scale_y,
+                        );
 
-                    draw_line(x0, y0, x1, y1, STAR_COLOR, pixels.frame_mut(), true);
+                        if (x - circle_x).powi(2) + (y - circle_y).powi(2) >= circle_radius.powi(2)
+                        {
+                            continue;
+                        }
+
+                        if col >= SCREEN_WIDTH || row >= SCREEN_HEIGHT {
+                            continue;
+                        }
+
+                        let pixel_index = ((col as usize * SCREEN_WIDTH) + row as usize) * 4;
+                        let pixel = &mut frame[pixel_index..pixel_index + 4];
+
+                        pixel.copy_from_slice(&[0, 255, 0, 255]);
+                    }
                 }
 
-                pixels.render().unwrap();
+                // Draw sin
+                for col in 0..SCREEN_WIDTH {
+                    let (x, _) =
+                        screen_to_world(col as f64, 0.0, offset_x, offset_y, scale_x, scale_y);
+
+                    let (_, y) = world_to_screen(x, x.sin(), offset_x, offset_y, scale_x, scale_y);
+                    let y = y.round();
+                    if y < 0.0 || y >= SCREEN_HEIGHT as f64 {
+                        continue;
+                    }
+
+                    let pixel_index = ((y as usize * SCREEN_WIDTH) + col) * 4;
+                    let pixel = &mut frame[pixel_index..pixel_index + 4];
+
+                    pixel.copy_from_slice(&[255, 0, 0, 255]);
+                }
+
+                // Draw line
+                let (x0, y0) = world_to_screen(0.0, 0.0, offset_x, offset_y, scale_x, scale_y);
+                let (x1, y1) = world_to_screen(32.0, 32.0, offset_x, offset_y, scale_x, scale_y);
+                let (x0, y0, x1, y1) = (
+                    x0.round() as i64,
+                    y0.round() as i64,
+                    x1.round() as i64,
+                    y1.round() as i64,
+                );
+
+                let dx = (x1 - x0).abs();
+                let dy = -(y1 - y0).abs();
+
+                let sx = if x0 < x1 { 1 } else { -1 };
+                let sy = if y0 < y1 { 1 } else { -1 };
+
+                let mut err = dx + dy;
+
+                let (mut x, mut y) = (x0, y0);
+
+                loop {
+                    if x >= 0 && x < SCREEN_WIDTH as i64 && y >= 0 && y < SCREEN_HEIGHT as i64 {
+                        let pixel_index = ((y as usize * SCREEN_WIDTH) + x as usize) * 4;
+                        let pixel = &mut frame[pixel_index..pixel_index + 4];
+
+                        pixel.copy_from_slice(&[0, 0, 255, 255]);
+                    }
+
+                    if x == x1 && y == y1 {
+                        break;
+                    }
+
+                    if err * 2 >= dy {
+                        if x == x1 {
+                            break;
+                        }
+                        err += dy;
+                        x += sx;
+                    }
+
+                    if err * 2 <= dx {
+                        if y == y1 {
+                            break;
+                        }
+                        err += dx;
+                        y += sy;
+                    }
+                }
+                pixels.render().expect("Failed to render");
             }
             _ => {}
         }
     });
 }
 
-struct Star {
-    position: (f64, f64),
-    direction: (f64, f64),
-    speed: f64,
+fn world_to_screen(
+    world_x: f64,
+    world_y: f64,
+    offset_x: f64,
+    offset_y: f64,
+    scale_x: f64,
+    scale_y: f64,
+) -> (f64, f64) {
+    let screen_x = (world_x - offset_x) * scale_x;
+    let screen_y = (-world_y - offset_y) * scale_y;
+    (screen_x, screen_y)
 }
 
-fn clear(color: (u8, u8, u8, u8), frame: &mut [u8]) {
-    debug_assert_eq!(frame.len(), 4 * WIDTH as usize * HEIGHT as usize);
+fn screen_to_world(
+    screen_x: f64,
+    screen_y: f64,
+    offset_x: f64,
+    offset_y: f64,
+    scale_x: f64,
+    scale_y: f64,
+) -> (f64, f64) {
+    let world_x = screen_x / scale_x + offset_x;
+    let world_y = -screen_y / scale_y - offset_y;
+    (world_x, world_y)
+}
 
+fn clear(frame: &mut [u8]) {
     for pixel in frame.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[color.0, color.1, color.2, color.3]);
+        pixel.copy_from_slice(&[0, 0, 0, 255]);
     }
 }
 
-fn draw_line(
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    color: (u8, u8, u8, u8),
-    frame: &mut [u8],
-    fade: bool,
-) {
-    debug_assert_eq!(frame.len(), 4 * WIDTH * HEIGHT);
-
+fn draw_line(x0: f64, y0: f64, x1: f64, y1: f64, frame: &mut [u8]) {
     let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
+    let sx = if x0 < x1 { 1.0 } else { -1.0 };
     let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1.0 } else { -1.0 };
     let mut error = dx + dy;
 
-    let width = WIDTH as i32;
-    let height = HEIGHT as i32;
-
-    // Used for fading
-    let d = (dx * dx + dy * dy) as f64;
-    let a = STAR_COLOR.3 as f64;
+    let width = SCREEN_WIDTH as f64;
+    let height = SCREEN_HEIGHT as f64;
 
     let mut x = x0;
     let mut y = y0;
 
     loop {
         // Draw pixel
-        if x >= 0 && x < width && y >= 0 && y < height {
-            let pixel_index = ((y as usize * WIDTH) + x as usize) * 4;
+        if x >= 0.0 && x < width && y >= 0.0 && y < height {
+            let pixel_index = ((y as usize * SCREEN_WIDTH) + x as usize) * 4;
             let pixel = &mut frame[pixel_index..pixel_index + 4];
-
-            if fade {
-                let alpha = a * ((x1 - x) * (x1 - x) + (y1 - y) * (y1 - y)) as f64 / d;
-                pixel.copy_from_slice(&[
-                    color.0,
-                    color.1,
-                    color.2,
-                    pixel[3].saturating_add(alpha as u8),
-                ]);
-            } else {
-                pixel.copy_from_slice(&[color.0, color.1, color.2, color.3]);
-            }
+            pixel.copy_from_slice(&[255, 0, 0, 255]);
         }
 
         // Move to next pixel
@@ -194,14 +245,14 @@ fn draw_line(
             break;
         }
 
-        if error * 2 >= dy {
+        if error * 2.0 >= dy {
             if x == x1 {
                 break;
             }
             error += dy;
             x += sx;
         }
-        if error * 2 <= dx {
+        if error * 2.0 <= dx {
             if y == y1 {
                 break;
             }
